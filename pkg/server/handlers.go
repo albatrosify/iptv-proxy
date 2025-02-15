@@ -64,7 +64,8 @@ func (c *Config) m3u8ReverseProxy(ctx *gin.Context) {
 }
 
 func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
-	utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL) // Or use c.Request.URL.Path for exact request path
+	headerStr := utils.LogHeaders("Incoming Request", ctx.Request.Header)
+	utils.DebugLog("-> Incoming URL: %s%s", ctx.Request.URL, headerStr)
 
 	client := &http.Client{}
 
@@ -76,7 +77,8 @@ func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
 
 	mergeHttpHeader(req.Header, ctx.Request.Header)
 
-	utils.DebugLog("<- Outgoing URL: %s", req.URL)
+	headerStr = utils.LogHeaders("Outgoing Request", req.Header)
+	utils.DebugLog("<- Outgoing URL: %s%s", req.URL, headerStr)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -133,7 +135,8 @@ type authRequest struct {
 }
 
 func (c *Config) authenticate(ctx *gin.Context) {
-	utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL) // Or use c.Request.URL.Path for exact request path
+	headerStr := utils.LogHeaders("Incoming Request", ctx.Request.Header)
+	utils.DebugLog("-> Incoming URL: %s%s", ctx.Request.URL, headerStr)
 
 	var authReq authRequest
 	if err := ctx.Bind(&authReq); err != nil {
@@ -146,7 +149,8 @@ func (c *Config) authenticate(ctx *gin.Context) {
 }
 
 func (c *Config) appAuthenticate(ctx *gin.Context) {
-	utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL) // Or use c.Request.URL.Path for exact request path
+	headerStr := utils.LogHeaders("Incoming Request", ctx.Request.Header)
+	utils.DebugLog("-> Incoming URL: %s%s", ctx.Request.URL, headerStr)
 
 	contents, err := ioutil.ReadAll(ctx.Request.Body)
 	if err != nil {

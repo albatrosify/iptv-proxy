@@ -30,6 +30,15 @@ services:
       #will be used for m3u and xtream auth poxy
       USER: test
       PASSWORD: testpassword
+      
+      # ---- Additional debugging options ----
+      DEBUG_LOGGING: false
+      # Save the IPTV Provider responses to this location
+      #CACHE_FOLDER: /root/iptv/cache/
+      USE_XTREAM_ADVANCED_PARSING: true
       # Set to true to use experimental URL parsing
       USE_EXPERIMENTAL_URL: false
-
+      # Set to true to enable header logging
+      DEBUG_HEADERS: false
+      # Controls header merging functionality
+      MERGE_HEADERS: false

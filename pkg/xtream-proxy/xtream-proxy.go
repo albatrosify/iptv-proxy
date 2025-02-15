@@ -58,6 +58,16 @@ func New(user, password, baseURL, userAgent string) (*Client, error) {
 	return &Client{cli}, nil
 }
 
+// NewWithHeaders creates a new xtream client with request headers
+func NewWithHeaders(user, password, baseURL, userAgent string, headers http.Header) (*Client, error) {
+	cli, err := xtream.NewClientWithUserAgentAndHeaders(context.Background(), user, password, baseURL, userAgent, headers)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{cli}, nil
+}
+
 type login struct {
 	UserInfo   xtream.UserInfo   `json:"user_info"`
 	ServerInfo xtream.ServerInfo `json:"server_info"`

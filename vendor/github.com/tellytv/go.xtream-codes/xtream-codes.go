@@ -39,69 +39,119 @@ type XtreamClient struct {
 	HTTP    *http.Client
 	Context context.Context
 
+	// Headers to be forwarded to upstream requests
+	RequestHeaders http.Header
+
 	// We store an internal map of Streams for use with GetStreamURL
 	streams map[int]Stream
 }
 
-// NewClient returns an initialized XtreamClient with the given values.
-func NewClient(username, password, baseURL string) (*XtreamClient, error) {
+// initClient initializes a new XtreamClient without making any HTTP requests
+func initClient(username, password, baseURL string) (*XtreamClient, error) {
 
 	_, parseURLErr := url.Parse(baseURL)
 	if parseURLErr != nil {
 		return nil, fmt.Errorf("error parsing url: %s", parseURLErr.Error())
 	}
 
-	client := &XtreamClient{
-		Username:  username,
-		Password:  password,
-		BaseURL:   baseURL,
-		UserAgent: defaultUserAgent,
+	return &XtreamClient{
+		Username:       username,
+		Password:       password,
+		BaseURL:        baseURL,
+		UserAgent:      defaultUserAgent,
+		HTTP:           http.DefaultClient,
+		Context:        context.Background(),
+		RequestHeaders: make(http.Header),
+		streams:        make(map[int]Stream),
+	}, nil
+}
 
-		HTTP:    http.DefaultClient,
-		Context: context.Background(),
-
-		streams: make(map[int]Stream),
-	}
-
-	authData, authErr := client.sendRequest("", nil)
+// authenticate performs the authentication request to the Xtream server
+func (c *XtreamClient) authenticate() error {
+	authData, authErr := c.sendRequest("", nil)
 	if authErr != nil {
-		return nil, fmt.Errorf("error sending authentication request: %s", authErr.Error())
+		return fmt.Errorf("error sending authentication request: %s", utils.ErrorWithLocation(authErr))
 	}
 
 	a := &AuthenticationResponse{}
 
 	if jsonErr := json.Unmarshal(authData, &a); jsonErr != nil {
-		debugLog("-> NewClient unmarshalling error for AuthenticationResponse - error: %s", jsonErr.Error())
-		return nil, fmt.Errorf("error unmarshaling json: %s", jsonErr.Error())
+		debugLog("-> authenticate unmarshalling error for AuthenticationResponse - error: %s", utils.ErrorWithLocation(jsonErr))
+		return fmt.Errorf("error unmarshaling json: %s", utils.ErrorWithLocation(jsonErr))
 	}
 
-	client.ServerInfo = a.ServerInfo
-	client.UserInfo = a.UserInfo
+	c.ServerInfo = a.ServerInfo
+	c.UserInfo = a.UserInfo
+	return nil
+}
+
+// NewClient returns an initialized XtreamClient with the given values.
+func NewClient(username, password, baseURL string) (*XtreamClient, error) {
+	client, err := initClient(username, password, baseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := client.authenticate(); err != nil {
+		return nil, utils.ErrorWithLocation(err)
+	}
 
 	return client, nil
 }
 
 // NewClientWithContext returns an initialized XtreamClient with the given values.
 func NewClientWithContext(ctx context.Context, username, password, baseURL string) (*XtreamClient, error) {
-	c, err := NewClient(username, password, baseURL)
+	client, err := initClient(username, password, baseURL)
 	if err != nil {
 		return nil, err
 	}
-	c.Context = ctx
 
-	return c, nil
+	client.Context = ctx
+
+	if err := client.authenticate(); err != nil {
+		return nil, utils.ErrorWithLocation(err)
+	}
+
+	return client, nil
 }
 
 // NewClientWithUserAgent returns an initialized XtreamClient with the given values.
 func NewClientWithUserAgent(ctx context.Context, username, password, baseURL, userAgent string) (*XtreamClient, error) {
-	c, err := NewClient(username, password, baseURL)
+	client, err := initClient(username, password, baseURL)
 	if err != nil {
 		return nil, err
 	}
-	c.UserAgent = userAgent
-	c.Context = ctx
 
-	return c, nil
+	client.Context = ctx
+	client.UserAgent = userAgent
+
+	if err := client.authenticate(); err != nil {
+		return nil, err
+	}
+
+	return client, nil
+}
+
+// NewClientWithUserAgentAndHeaders returns an initialized XtreamClient with custom headers
+func NewClientWithUserAgentAndHeaders(ctx context.Context, username, password, baseURL string, userAgent string, headers http.Header) (*XtreamClient, error) {
+	client, err := initClient(username, password, baseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	client.Context = ctx
+	client.UserAgent = userAgent
+
+	// Set headers from provided headers
+	for k, v := range headers {
+		client.RequestHeaders[k] = v
+	}
+
+	if err := client.authenticate(); err != nil {
+		return nil, err
+	}
+
+	return client, nil
 }
 
 // GetStreamURL will return a stream URL string for the given streamID and wantedFormat.
@@ -448,14 +498,18 @@ func (c *XtreamClient) sendRequestWithURL(action string, parameters url.Values) 
 		url = fmt.Sprintf("%s&%s", url, parameters.Encode())
 	}
 
-	debugLog("<- Outgoing URL: %s", url)
-
 	request, httpErr := http.NewRequest("GET", url, nil)
 	if httpErr != nil {
 		return nil, url, httpErr
 	}
 
 	request.Header.Set("User-Agent", c.UserAgent)
+
+	// Merge headers with filtering
+	utils.MergeHttpHeader(request.Header, c.RequestHeaders, utils.DefaultHeaderFilter)
+
+	headerStr := utils.LogHeaders("Outgoing Request", request.Header)
+	debugLog("<- Outgoing URL: %s%s", url, headerStr)
 
 	request = request.WithContext(c.Context)
 

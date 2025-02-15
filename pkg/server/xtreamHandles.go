@@ -78,9 +78,9 @@ func (c *Config) cacheXtreamM3u(playlist *m3u.Playlist, cacheName string) error 
 }
 
 func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Playlist, error) {
-	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
+	client, err := xtreamapi.NewWithHeaders(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent(), ctx.Request.Header)
 	if err != nil {
-		utils.DebugLog("-> ** xtreamGenerateM3u: xtreamapi.New - error: %s", err.Error())
+		utils.DebugLog("-> ** xtreamGenerateM3u: xtreamapi.NewWithHeaders - error: %s", err.Error())
 		return nil, err
 	}
 
@@ -334,9 +334,9 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 		action = q["action"][0]
 	}
 
-	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
+	client, err := xtreamapi.NewWithHeaders(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent(), ctx.Request.Header)
 	if err != nil {
-		utils.DebugLog("-> ** xtreamPlayerAPI: xtreamapi.New - error: %s", err.Error())
+		utils.DebugLog("-> ** xtreamPlayerAPI: xtreamapi.NewWithHeaders - error: %s", err.Error())
 		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
 		return
 	}
@@ -444,9 +444,9 @@ func processXtreamStruct(item interface{}) interface{} {
 }
 
 func (c *Config) xtreamXMLTV(ctx *gin.Context) {
-	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
+	client, err := xtreamapi.NewWithHeaders(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent(), ctx.Request.Header)
 	if err != nil {
-		utils.DebugLog("-> ** xtreamXMLTV: xtreamapi.New - error: %s", err.Error())
+		utils.DebugLog("-> ** xtreamXMLTV: xtreamapi.NewWithHeaders - error: %s", err.Error())
 		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
 		return
 	}
