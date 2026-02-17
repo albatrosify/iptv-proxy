@@ -40,7 +40,12 @@ func formatError(err error) error {
 	}
 
 	// Get the caller information
-	pc, file, line, ok := runtime.Caller(1)
+	// We use 2 to skip:
+	// 0: runtime.Caller
+	// 1: formatError
+	// 2: The wrapper function (ErrorWithLocation or PrintErrorAndReturn)
+	// 3: The actual caller
+	pc, file, line, ok := runtime.Caller(2)
 	if !ok {
 		return fmt.Errorf("error occurred: %v", err)
 	}

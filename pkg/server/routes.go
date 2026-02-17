@@ -27,6 +27,8 @@ import (
 )
 
 func (c *Config) routes(r *gin.RouterGroup) {
+	r.GET("/health", c.healthHandler)
+
 	r = r.Group(c.CustomEndpoint)
 
 	//Xtream service endopoints

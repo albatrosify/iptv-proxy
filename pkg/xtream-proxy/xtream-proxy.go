@@ -27,7 +27,7 @@ import (
 
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/config"
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/utils"
-	xtream "github.com/tellytv/go.xtream-codes"
+	xtream "github.com/sherif-fanous/xtreamcodes"
 )
 
 const (
@@ -45,16 +45,12 @@ const (
 
 // Client represent an xtream client
 type Client struct {
-	*xtream.XtreamClient
+	*xtream.Client
 }
 
 // New new xtream client
 func New(user, password, baseURL, userAgent string) (*Client, error) {
-	cli, err := xtream.NewClientWithUserAgent(context.Background(), user, password, baseURL, userAgent)
-	if err != nil {
-		return nil, utils.PrintErrorAndReturn(err)
-	}
-
+	cli := xtream.NewClient(baseURL, user, password, xtream.WithUserAgent(userAgent))
 	return &Client{cli}, nil
 }
 
@@ -65,29 +61,48 @@ type login struct {
 
 // Login xtream login
 func (c *Client) login(proxyUser, proxyPassword, proxyURL string, proxyPort int, protocol string) (login, error) {
+	// Note: The new library returns specific types. We need to map them back to what the proxy expects
+	// or update the proxy to use the new types.
+	// This function seems to construct a response object to return to the client.
+	// We might need to manually construct the struct since we don't have the "internal" one.
+
+	// For now, let's assume we can construct the clean structs directly.
+	// However, we need to populate them.
+	// Since we are mocking the response for the proxy, we can just set values.
+
+	// But wait, where does c.UserInfo come from?
+	// The original code accessed c.UserInfo. It seems the old client struct exposed the UserInfo directly?
+	// The new Client struct doesn't expose UserInfo/ServerInfo directly. We have to fetch it.
+	
+	ctx := context.Background()
+	authInfo, err := c.GetAuthInfo(ctx)
+	if err != nil {
+		return login{}, err
+	}
+
 	req := login{
 		UserInfo: xtream.UserInfo{
 			Username:             proxyUser,
 			Password:             proxyPassword,
-			Message:              c.UserInfo.Message,
-			Auth:                 c.UserInfo.Auth,
-			Status:               c.UserInfo.Status,
-			ExpDate:              c.UserInfo.ExpDate,
-			IsTrial:              c.UserInfo.IsTrial,
-			ActiveConnections:    c.UserInfo.ActiveConnections,
-			CreatedAt:            c.UserInfo.CreatedAt,
-			MaxConnections:       c.UserInfo.MaxConnections,
-			AllowedOutputFormats: c.UserInfo.AllowedOutputFormats,
+			Message:              authInfo.UserInfo.Message,
+			IsAuthorized:         authInfo.UserInfo.IsAuthorized, // Mapped from Auth
+			Status:               authInfo.UserInfo.Status,
+			ExpiresAt:            authInfo.UserInfo.ExpiresAt, // Mapped from ExpDate
+			IsTrial:              authInfo.UserInfo.IsTrial,
+			ActiveConnections:    authInfo.UserInfo.ActiveConnections,
+			CreatedAt:            authInfo.UserInfo.CreatedAt,
+			MaxConnections:       authInfo.UserInfo.MaxConnections,
+			AllowedOutputFormats: authInfo.UserInfo.AllowedOutputFormats,
 		},
 		ServerInfo: xtream.ServerInfo{
-			URL:          proxyURL,
-			Port:         xtream.FlexInt(proxyPort),
-			HTTPSPort:    xtream.FlexInt(proxyPort),
-			Protocol:     protocol,
-			RTMPPort:     xtream.FlexInt(proxyPort),
-			Timezone:     c.ServerInfo.Timezone,
-			TimestampNow: c.ServerInfo.TimestampNow,
-			TimeNow:      c.ServerInfo.TimeNow,
+			URL:            proxyURL,
+			HTTPPort:       proxyPort, // Mapped from Port
+			HTTPSPort:      proxyPort,
+			ServerProtocol: protocol,  // Mapped from Protocol
+			RTMPPort:       proxyPort,
+			Timezone:       authInfo.ServerInfo.Timezone,
+			TimestampNow:   authInfo.ServerInfo.TimestampNow,
+			TimeNow:        authInfo.ServerInfo.TimeNow,
 		},
 	}
 
@@ -103,10 +118,11 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 
 	// Default content type for most responses
 	contentType = "application/json"
+	ctx := context.Background()
 
 	switch action {
 	case getLiveCategories:
-		respBody, err = c.GetLiveCategories()
+		respBody, err = c.ListLiveCategories(ctx)
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -115,12 +131,17 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 		if len(q["category_id"]) > 0 {
 			categoryID = q["category_id"][0]
 		}
-		respBody, err = c.GetLiveStreams(categoryID)
+		if categoryID != "" {
+			respBody, err = c.ListLiveStreamsInCategory(ctx, categoryID)
+		} else {
+			respBody, err = c.ListLiveStreams(ctx)
+		}
+		
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
 	case getVodCategories:
-		respBody, err = c.GetVideoOnDemandCategories()
+		respBody, err = c.ListVODCategories(ctx)
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -129,7 +150,12 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 		if len(q["category_id"]) > 0 {
 			categoryID = q["category_id"][0]
 		}
-		respBody, err = c.GetVideoOnDemandStreams(categoryID)
+		if categoryID != "" {
+			respBody, err = c.ListVODStreamsInCategory(ctx, categoryID)
+		} else {
+			respBody, err = c.ListVODStreams(ctx)
+		}
+
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -139,12 +165,12 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 			err = utils.PrintErrorAndReturn(err)
 			return
 		}
-		respBody, err = c.GetVideoOnDemandInfo(q["vod_id"][0])
+		respBody, err = c.GetVODInfo(ctx, q["vod_id"][0])
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
 	case getSeriesCategories:
-		respBody, err = c.GetSeriesCategories()
+		respBody, err = c.ListSeriesCategories(ctx)
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -153,7 +179,12 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 		if len(q["category_id"]) > 0 {
 			categoryID = q["category_id"][0]
 		}
-		respBody, err = c.GetSeries(categoryID)
+		if categoryID != "" {
+			respBody, err = c.ListSeriesStreamsInCategory(ctx, categoryID)
+		} else {
+			respBody, err = c.ListSeriesStreams(ctx)
+		}
+
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -163,7 +194,7 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 			err = utils.PrintErrorAndReturn(err)
 			return
 		}
-		respBody, err = c.GetSeriesInfo(q["series_id"][0])
+		respBody, err = c.GetSeriesInfo(ctx, q["series_id"][0])
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -183,7 +214,12 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 				return
 			}
 		}
-		respBody, err = c.GetShortEPG(q["stream_id"][0], limit)
+		if limit > 0 {
+			respBody, err = c.GetShortEPGWithLimits(ctx, q["stream_id"][0], limit)
+		} else {
+			respBody, err = c.GetShortEPG(ctx, q["stream_id"][0])
+		}
+		
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -193,7 +229,7 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 			err = utils.PrintErrorAndReturn(err)
 			return
 		}
-		respBody, err = c.GetEPG(q["stream_id"][0])
+		respBody, err = c.GetAllEPG(ctx, q["stream_id"][0])
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}

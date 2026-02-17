@@ -20,13 +20,16 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/jamesnetherton/m3u"
@@ -51,6 +54,9 @@ type Config struct {
 	proxyfiedM3UPath string
 
 	endpointAntiColision string
+
+	httpClient *http.Client
+	httpServer *http.Server
 }
 
 // NewServer initialize a new server configuration
@@ -68,12 +74,24 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		endpointAntiColision = trimmedCustomId
 	}
 
+	// Create a custom transport for better performance
+	t := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
 	return &Config{
 		config,
 		&p,
 		nil,
 		defaultProxyfiedM3UPath,
 		endpointAntiColision,
+		&http.Client{
+			Transport: t,
+			Timeout:   30 * time.Second,
+		},
+		nil,
 	}, nil
 }
 
@@ -88,10 +106,25 @@ func (c *Config) Serve() error {
 	group := router.Group("/")
 	c.routes(group)
 
-	// Add a message to indicate the server is ready
 	log.Printf("[iptv-proxy] Server is ready and listening on :%d", c.HostConfig.Port)
 
-	return router.Run(fmt.Sprintf(":%d", c.HostConfig.Port))
+	c.httpServer = &http.Server{
+		Addr:              fmt.Sprintf(":%d", c.HostConfig.Port),
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	return c.httpServer.ListenAndServe()
+}
+
+func (c *Config) Shutdown(ctx context.Context) error {
+	if c.httpServer != nil {
+		return c.httpServer.Shutdown(ctx)
+	}
+	return nil
 }
 
 func (c *Config) playlistInitialization() error {

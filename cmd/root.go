@@ -19,11 +19,16 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/config"
 
@@ -41,6 +46,9 @@ var rootCmd = &cobra.Command{
 	Use:   "iptv-proxy",
 	Short: "Reverse proxy on iptv m3u file and xtream codes server api",
 	Run: func(cmd *cobra.Command, args []string) {
+		// Create a context that listens for the interrupt signal from the OS.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
 
 		log.Printf("[iptv-proxy] Server is starting...")
 
@@ -104,14 +112,35 @@ var rootCmd = &cobra.Command{
 			conf.AdvertisedPort = conf.HostConfig.Port
 		}
 
-		server, err := server.NewServer(conf)
+		srv, err := server.NewServer(conf)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("[iptv-proxy] Error: %v", err)
 		}
 
-		if e := server.Serve(); e != nil {
-			log.Fatal(e)
+		// Initializing the server in a goroutine so that
+		// it won't block the graceful shutdown handling below
+		go func() {
+			if err := srv.Serve(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("[iptv-proxy] listen: %s\n", err)
+			}
+		}()
+
+		// Listen for the interrupt signal.
+		<-ctx.Done()
+
+		// Restore default behavior on the interrupt signal and notify user of shutdown.
+		stop()
+		log.Println("[iptv-proxy] shutting down gracefully, press Ctrl+C again to force")
+
+		// The context is used to inform the server it has 5 seconds to finish
+		// the request it is currently handling
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Fatal("[iptv-proxy] Server forced to shutdown: ", err)
 		}
+
+		log.Println("[iptv-proxy] Server exiting")
 	},
 }
 

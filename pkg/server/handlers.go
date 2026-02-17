@@ -20,6 +20,8 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -66,9 +68,8 @@ func (c *Config) m3u8ReverseProxy(ctx *gin.Context) {
 func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
 	utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL) // Or use c.Request.URL.Path for exact request path
 
-	client := &http.Client{}
-
-	req, err := http.NewRequest("GET", oriURL.String(), nil)
+	// Use context from the request to ensure cancellation is propagated
+	req, err := http.NewRequestWithContext(ctx.Request.Context(), "GET", oriURL.String(), nil)
 	if err != nil {
 		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
 		return
@@ -76,8 +77,12 @@ func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
 
 	mergeHttpHeader(req.Header, ctx.Request.Header)
 
-	resp, err := client.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// Check if error is due to context cancellation
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
 		return
 	}
@@ -85,8 +90,15 @@ func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
 
 	mergeHttpHeader(ctx.Writer.Header(), resp.Header)
 	ctx.Status(resp.StatusCode)
+	
+	// Create a 32KB buffer for copying to reduce GC pressure
+	buf := make([]byte, 32*1024)
 	ctx.Stream(func(w io.Writer) bool {
-		io.Copy(w, resp.Body) // nolint: errcheck
+		_, err := io.CopyBuffer(w, resp.Body, buf)
+		if err != nil {
+			// If error is due to client disconnect, it's expected
+			return false
+		}
 		return false
 	})
 }

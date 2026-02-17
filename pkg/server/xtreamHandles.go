@@ -20,6 +20,7 @@ package server
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -28,7 +29,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +39,6 @@ import (
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/utils"
 	xtreamapi "github.com/pierre-emmanuelJ/iptv-proxy/pkg/xtream-proxy"
 	uuid "github.com/satori/go.uuid"
-	xtream "github.com/tellytv/go.xtream-codes"
 )
 
 type cacheMeta struct {
@@ -83,7 +82,17 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 		return nil, utils.PrintErrorAndReturn(err)
 	}
 
-	cat, err := client.GetLiveCategories()
+	// client.Action calls ListLiveCategories internally if we use that, 
+	// but here we are using the client directly.
+	// We need to use the exposed methods on the client.
+	// The client returned by xtreamapi.New wraps *xtream.Client.
+	// note: xtreamapi.Client embeds *xtream.Client
+
+	// xtreamapi.New returns *xtreamapi.Client
+	
+	// We need to call the methods on the embedded *xtream.Client
+	
+	cat, err := client.ListLiveCategories(ctx)
 	if err != nil {
 		return nil, utils.PrintErrorAndReturn(err)
 	}
@@ -100,7 +109,7 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 	playlist.Tracks = make([]m3u.Track, 0)
 
 	for _, category := range cat {
-		live, err := client.GetLiveStreams(fmt.Sprint(category.ID))
+		live, err := client.ListLiveStreamsInCategory(ctx, fmt.Sprint(category.CategoryID))
 		if err != nil {
 			return nil, utils.PrintErrorAndReturn(err)
 		}
@@ -109,20 +118,20 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 			track := m3u.Track{Name: stream.Name, Length: -1, URI: "", Tags: nil}
 
 			//TODO: Add more tag if needed.
-			if stream.EPGChannelID != "" {
-				track.Tags = append(track.Tags, m3u.Tag{Name: "tvg-id", Value: stream.EPGChannelID})
+			if stream.EPGChannelID != nil && *stream.EPGChannelID != "" {
+				track.Tags = append(track.Tags, m3u.Tag{Name: "tvg-id", Value: *stream.EPGChannelID})
 			}
 			if stream.Name != "" {
 				track.Tags = append(track.Tags, m3u.Tag{Name: "tvg-name", Value: stream.Name})
 			}
-			if stream.Icon != "" {
-				track.Tags = append(track.Tags, m3u.Tag{Name: "tvg-logo", Value: stream.Icon})
+			if stream.StreamIcon != "" {
+				track.Tags = append(track.Tags, m3u.Tag{Name: "tvg-logo", Value: stream.StreamIcon})
 			}
-			if category.Name != "" {
-				track.Tags = append(track.Tags, m3u.Tag{Name: "group-title", Value: category.Name})
+			if category.CategoryName != "" {
+				track.Tags = append(track.Tags, m3u.Tag{Name: "group-title", Value: category.CategoryName})
 			}
 
-			track.URI = fmt.Sprintf("%s/%s%s/%s/%s%s", c.XtreamBaseURL, prefix, c.XtreamUser, c.XtreamPassword, fmt.Sprint(stream.ID), extension)
+			track.URI = fmt.Sprintf("%s/%s%s/%s/%s%s", c.XtreamBaseURL, prefix, c.XtreamUser, c.XtreamPassword, fmt.Sprint(stream.StreamID), extension)
 			playlist.Tracks = append(playlist.Tracks, track)
 		}
 	}
@@ -283,86 +292,16 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 
 // ProcessResponse processes various types of xtream-codes responses
 func ProcessResponse(resp interface{}) interface{} {
-
-	respType := reflect.TypeOf(resp)
-
-	switch {
-	case respType == nil:
-		return resp
-	case strings.Contains(respType.String(), "[]xtreamcodes."):
-		return processXtreamArray(resp)
-	case strings.Contains(respType.String(), "xtreamcodes."):
-		return processXtreamStruct(resp)
-	default:
-	}
 	return resp
 }
 
+/*
 func processXtreamArray(arr interface{}) interface{} {
-	v := reflect.ValueOf(arr)
-	if v.Kind() != reflect.Slice {
-		return arr
-	}
-
-	if v.Len() == 0 {
-		return arr
-	}
-
-	// Check if the first item is an xtreamcodes struct having a Fields field
-	if !isXtreamCodesStruct(v.Index(0).Interface()) {
-		return arr
-	}
-
-	result := make([]interface{}, v.Len())
-	for i := 0; i < v.Len(); i++ {
-		result[i] = processXtreamStruct(v.Index(i).Interface())
-	}
-
-	return result
+	// ... (legacy code removed/commented)
+	return arr
 }
-
-// Define a helper function to check if fields exist
-func hasFieldsField(item interface{}) bool {
-	respValue := reflect.ValueOf(item)
-	if respValue.Kind() == reflect.Ptr {
-		respValue = respValue.Elem()
-	}
-
-	// Check for specific fields, e.g., "Fields"
-	fieldValue := respValue.FieldByName(xtream.StructFields)
-	return fieldValue.IsValid() && !fieldValue.IsNil()
-}
-
-func isXtreamCodesStruct(item interface{}) bool {
-	respType := reflect.TypeOf(item)
-	return respType != nil && strings.Contains(respType.String(), "xtreamcodes.") && hasFieldsField(item)
-}
-
-func processXtreamStruct(item interface{}) interface{} {
-	if isXtreamCodesStruct(item) {
-		respValue := reflect.ValueOf(item)
-		if respValue.Kind() == reflect.Ptr {
-			respValue = respValue.Elem()
-		}
-
-		fieldValue := respValue.FieldByName(xtream.StructFields)
-		if fieldValue.IsValid() && !fieldValue.IsNil() {
-
-			if fieldValue.Kind() == reflect.Slice && fieldValue.Type().Elem().Kind() == reflect.Uint8 {
-				var unmarshaledValue interface{}
-				err := json.Unmarshal(fieldValue.Interface().([]byte), &unmarshaledValue)
-				if err != nil {
-					utils.DebugLog("-- processXtreamStruct: JSON unmarshal error: %v", err)
-					return fieldValue.Interface()
-				}
-				return unmarshaledValue
-			}
-
-			return fieldValue.Interface()
-		}
-	}
-	return item
-}
+// ... remove other legacy reflection functions ...
+*/
 
 func (c *Config) xtreamXMLTV(ctx *gin.Context) {
 	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
@@ -371,7 +310,7 @@ func (c *Config) xtreamXMLTV(ctx *gin.Context) {
 		return
 	}
 
-	resp, err := client.GetXMLTV()
+	resp, err := client.GetXMLTV(ctx)
 	if err != nil {
 		ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)) // nolint: errcheck
 		return
@@ -380,7 +319,13 @@ func (c *Config) xtreamXMLTV(ctx *gin.Context) {
 	// Write response to file
 	// utils.WriteResponseToFile(ctx, resp)
 
-	ctx.Data(http.StatusOK, "application/xml", resp)
+	b, err := xml.Marshal(resp)
+	if err != nil {
+		ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)) // nolint: errcheck
+		return
+	}
+
+	ctx.Data(http.StatusOK, "application/xml", b)
 }
 
 func (c *Config) xtreamStreamHandler(ctx *gin.Context) {

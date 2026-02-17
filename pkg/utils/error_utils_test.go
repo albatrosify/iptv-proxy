@@ -56,7 +56,7 @@ func TestGetErrorDetailLevel(t *testing.T) {
 func TestErrorWithLocation(t *testing.T) {
 	// First, show example formats
 	t.Run("show_formats", func(t *testing.T) {
-		ExampleErrorFormats(t)
+		showErrorFormats(t)
 	})
 
 	tests := []struct {
@@ -76,7 +76,7 @@ func TestErrorWithLocation(t *testing.T) {
 			err:         errors.New("test error"),
 			detailLevel: "simple",
 			expectedParts: []string{
-				"error_utils.go",
+				"error_utils_test.go",
 				"test error",
 			},
 			unexpectedParts: []string{
@@ -91,7 +91,7 @@ func TestErrorWithLocation(t *testing.T) {
 			expectedParts: []string{
 				"Error Location:",
 				"Full Path:",
-				"File: error_utils.go",
+				"File: error_utils_test.go",
 				"Line:",
 				"Function:",
 				"Error Details:",
@@ -104,7 +104,7 @@ func TestErrorWithLocation(t *testing.T) {
 			err:         errors.New("test error"),
 			detailLevel: "none",
 			expectedParts: []string{
-				"error_utils.go",
+				"error_utils_test.go",
 				"test error",
 			},
 			unexpectedParts: []string{
@@ -225,7 +225,7 @@ func TestPrintErrorAndReturn(t *testing.T) {
 	}
 }
 
-func ExampleErrorFormats(t *testing.T) {
+func showErrorFormats(t *testing.T) {
 	// Save original env var to restore later
 	origEnv := os.Getenv("ERROR_DETAIL_LEVEL")
 	defer os.Setenv("ERROR_DETAIL_LEVEL", origEnv)
