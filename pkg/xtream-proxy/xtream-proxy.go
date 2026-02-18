@@ -20,13 +20,17 @@ package xtreamproxy
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/config"
 	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/utils"
+	"github.com/sherif-fanous/xmltv"
 	xtream "github.com/sherif-fanous/xtreamcodes"
 )
 
@@ -46,12 +50,22 @@ const (
 // Client represent an xtream client
 type Client struct {
 	*xtream.Client
+	baseURL   string
+	username  string
+	password  string
+	userAgent string
 }
 
 // New new xtream client
 func New(user, password, baseURL, userAgent string) (*Client, error) {
 	cli := xtream.NewClient(baseURL, user, password, xtream.WithUserAgent(userAgent))
-	return &Client{cli}, nil
+	return &Client{
+		Client:    cli,
+		baseURL:   baseURL,
+		username:  user,
+		password:  password,
+		userAgent: userAgent,
+	}, nil
 }
 
 type login struct {
@@ -73,7 +87,7 @@ func (c *Client) login(proxyUser, proxyPassword, proxyURL string, proxyPort int,
 	// But wait, where does c.UserInfo come from?
 	// The original code accessed c.UserInfo. It seems the old client struct exposed the UserInfo directly?
 	// The new Client struct doesn't expose UserInfo/ServerInfo directly. We have to fetch it.
-	
+
 	ctx := context.Background()
 	authInfo, err := c.GetAuthInfo(ctx)
 	if err != nil {
@@ -98,7 +112,7 @@ func (c *Client) login(proxyUser, proxyPassword, proxyURL string, proxyPort int,
 			URL:            proxyURL,
 			HTTPPort:       proxyPort, // Mapped from Port
 			HTTPSPort:      proxyPort,
-			ServerProtocol: protocol,  // Mapped from Protocol
+			ServerProtocol: protocol, // Mapped from Protocol
 			RTMPPort:       proxyPort,
 			Timezone:       authInfo.ServerInfo.Timezone,
 			TimestampNow:   authInfo.ServerInfo.TimestampNow,
@@ -136,7 +150,7 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 		} else {
 			respBody, err = c.ListLiveStreams(ctx)
 		}
-		
+
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -219,7 +233,7 @@ func (c *Client) Action(config *config.ProxyConfig, action string, q url.Values)
 		} else {
 			respBody, err = c.GetShortEPG(ctx, q["stream_id"][0])
 		}
-		
+
 		if err != nil {
 			err = utils.PrintErrorAndReturn(err)
 		}
@@ -252,4 +266,64 @@ func validateParams(u url.Values, params ...string) (int, error) {
 	}
 
 	return 0, nil
+}
+
+// GetXMLTV retrieves the XMLTV EPG data.
+// Overrides the default xtream.Client.GetXMLTV method to handle date parsing issues.
+func (c *Client) GetXMLTV(ctx context.Context) (*xmltv.EPG, error) {
+	// 1. Construct the URL manually as we need to customize the request or handle raw response
+	// The original client uses internal buildURL logic which we can replicate simply.
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = "/xmltv.php" //Standard path for XMLTV in Xtream Codes
+
+	q := u.Query()
+	q.Set("username", c.username)
+	q.Set("password", c.password)
+	u.RawQuery = q.Encode()
+
+	// 2. Create Request
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+
+	// 3. Execute Request
+	// Note: We use default client here, ideally we should reuse the one from xtream.Client but it is unexported.
+	// We can create a new one.
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("XMLTV request failed with status: %d", resp.StatusCode)
+	}
+
+	// 4. Read Body
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	bodyStr := string(bodyBytes)
+
+	// 5. Sanitize Body
+	// Replace <date>YYYY</date> with <date>YYYY0101</date>
+	// Case insensitive just in case
+	re := regexp.MustCompile(`(?i)<date>\s*(\d{4})\s*</date>`)
+	fixedBodyStr := re.ReplaceAllString(bodyStr, "<date>${1}0101</date>")
+
+	// 6. Decode XML
+	var epg xmltv.EPG
+	if err := xml.Unmarshal([]byte(fixedBodyStr), &epg); err != nil {
+		return nil, fmt.Errorf("failed to decode XMLTV response: %w", err)
+	}
+
+	return &epg, nil
 }
